@@ -276,6 +276,8 @@ async function joinConference() {
     // Start monitoring peer activity
     setInterval(checkPeerActivity, 10000); // Check every 10 seconds
 
+    setInterval(sendPingToPeers, 5000); // Every 5 seconds
+
     // Handle page unload to send "leave" message
     window.addEventListener('beforeunload', () => {
         sendMqttMessage({ type: 'leave' });
@@ -336,7 +338,12 @@ function checkPeerActivity() {
         }
     }
 }
-
+function sendPingToPeers() {
+    for (const peerId in peers) {
+        sendMqttMessage({ type: 'ping' }, peerId);
+        console.log(`Sent ping to peer ${peerId}`);
+    }
+}
 // Function to close all connections when leaving the conference
 function closeAllConnections() {
     for (const peerId in peers) {
