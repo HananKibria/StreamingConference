@@ -2,12 +2,12 @@
 
 let mqttClient;
 let localId;
-const peers = {}; // Holds RTCPeerConnections keyed by peer ID
-const peerStates = {}; // Holds negotiation flags per peer
-const peerStreams = {}; // Holds MediaStreams from each peer
-const remoteVideoContainers = {}; // Holds video elements for each peer
+let peers = {}; // Holds RTCPeerConnections keyed by peer ID
+let peerStates = {}; // Holds negotiation flags per peer
+let peerStreams = {}; // Holds MediaStreams from each peer
+let remoteVideoContainers = {}; // Holds video elements for each peer
 let localStream; // Global variable for local media stream
-const peerActivity = {}; // Tracks the last activity time of peers
+let peerActivity = {}; // Tracks the last activity time of peers
 
 // Generate a unique ID for this peer
 function generateUniqueId() {
@@ -87,7 +87,7 @@ function initiateConnectionWithPeer(peerId) {
         pendingCandidates: []
     };
 
-    // Add local tracks to the connection
+    // Add local tracks to the connection if any
     localStream.getTracks().forEach(track => {
         peerConnection.addTrack(track, localStream);
     });
@@ -95,7 +95,6 @@ function initiateConnectionWithPeer(peerId) {
     // Initialize peer activity timestamp
     peerActivity[peerId] = Date.now();
 }
-
 // Function to make an offer to a peer
 async function makeOffer(peerId) {
     const peerConnection = peers[peerId];
@@ -192,35 +191,45 @@ async function handleIceCandidate(peerId, candidate) {
 }
 // Function to attach a remote stream to a video element
 function attachRemoteStream(peerId, stream) {
-    let remoteVideo = remoteVideoContainers[peerId];
-    if (!remoteVideo) {
-        remoteVideo = document.createElement('div');
-        remoteVideo.classList.add('video-wrapper');
+    let remoteVideoWrapper = remoteVideoContainers[peerId];
+    if (!remoteVideoWrapper) {
+        remoteVideoWrapper = document.createElement('div');
+        remoteVideoWrapper.classList.add('video-wrapper');
 
         const videoHeader = document.createElement('h2');
         videoHeader.textContent = `Participant ${peerId}`;
-        remoteVideo.appendChild(videoHeader);
+        remoteVideoWrapper.appendChild(videoHeader);
 
         const videoElement = document.createElement('video');
         videoElement.id = `remoteVideo_${peerId}`;
         videoElement.autoplay = true;
         videoElement.playsInline = true;
-        remoteVideo.appendChild(videoElement);
+        remoteVideoWrapper.appendChild(videoElement);
 
-        document.getElementById('remoteVideos').appendChild(remoteVideo);
-        remoteVideoContainers[peerId] = videoElement;
+        document.getElementById('remoteVideos').appendChild(remoteVideoWrapper);
+
+        // Store the wrapper div instead of the video element
+        remoteVideoContainers[peerId] = remoteVideoWrapper;
     }
-    remoteVideoContainers[peerId].srcObject = stream;
+    const videoElement = remoteVideoWrapper.querySelector('video');
+    videoElement.srcObject = stream;
 }
 
 // Function to send MQTT message
-function sendMqttMessage(payload, recipientId = null) {
+function sendMqttMessage(payload, recipientId = null, callback = () => {}) {
     const meetingId = document.getElementById('meetingId').value;
     const mqttTopic = mqttTopicPrefix + meetingId;
     payload.sender = localId;
     payload.recipient = recipientId; // Null means broadcast to all
-    mqttClient.publish(mqttTopic, JSON.stringify(payload));
-    console.log('Sent message:', payload);
+
+    mqttClient.publish(mqttTopic, JSON.stringify(payload), {}, (err) => {
+        if (err) {
+            console.error('Failed to send message:', err);
+        } else {
+            console.log('Sent message:', payload);
+        }
+        callback(); // Ensure the callback is called after attempting to send the message
+    });
 }
 
 // Function to join the conference
@@ -245,7 +254,16 @@ async function joinConference() {
         console.log('Received message:', payload);
 
         const senderId = payload.sender;
-
+        if (payload.type === 'ping') {
+            // Update peer activity timestamp
+            peerActivity[senderId] = Date.now();
+            console.log(`Received ping from peer ${senderId}`);
+            return; // No further processing needed for ping messages
+        }
+    
+        // Update peer activity timestamp for other message types
+        peerActivity[senderId] = Date.now();
+    
         // Update peer activity timestamp
         peerActivity[senderId] = Date.now();
 
@@ -287,13 +305,37 @@ async function joinConference() {
 
 // Function to set up local media (camera and microphone)
 async function setupLocalMedia() {
+    const enableVideo = document.getElementById('enableVideo').checked;
+    const enableAudio = document.getElementById('enableAudio').checked;
+
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+        if (enableVideo || enableAudio) {
+            localStream = await navigator.mediaDevices.getUserMedia({
+                video: enableVideo,
+                audio: enableAudio
+            });
+        } else {
+            // Create an empty stream if no media is enabled
+            localStream = new MediaStream();
+        }
+
+        // Set up local video display
         const localVideo = document.getElementById('localVideo');
-        localVideo.srcObject = localStream;
-        console.log('Local media set up');
+        if (enableVideo) {
+            localVideo.srcObject = localStream;
+            localVideo.style.display = 'block';
+        } else {
+            localVideo.srcObject = null;
+            localVideo.style.display = 'none';
+        }
+
+        console.log('Local media set up with video:', enableVideo, 'audio:', enableAudio);
     } catch (err) {
         console.error('Error accessing local media:', err);
+        alert('Could not access camera or microphone. Please check permissions.');
+
+        // Create an empty stream if access is denied
+        localStream = new MediaStream();
     }
 }
 
@@ -307,10 +349,12 @@ function removePeer(peerId) {
         delete peers[peerId];
     }
 
-    // Remove the video element
+    // Remove the video wrapper from the DOM
     if (remoteVideoContainers[peerId]) {
-        const videoWrapper = remoteVideoContainers[peerId].parentElement;
-        videoWrapper.parentElement.removeChild(videoWrapper);
+        const videoWrapper = remoteVideoContainers[peerId];
+        if (videoWrapper) {
+            videoWrapper.remove(); // Remove the wrapper div from the DOM
+        }
         delete remoteVideoContainers[peerId];
     }
 
@@ -324,8 +368,12 @@ function removePeer(peerId) {
     if (peerActivity[peerId]) {
         delete peerActivity[peerId];
     }
-}
 
+    // Remove peer state
+    if (peerStates[peerId]) {
+        delete peerStates[peerId];
+    }
+}
 // Function to check peer activity and remove inactive peers
 function checkPeerActivity() {
     const currentTime = Date.now();
@@ -349,15 +397,156 @@ function closeAllConnections() {
     for (const peerId in peers) {
         if (peers[peerId]) {
             peers[peerId].close();
+            delete peers[peerId];
+
         }
     }
 }
+async function handleMediaToggle() {
+    const enableVideo = document.getElementById('enableVideo').checked;
+    const enableAudio = document.getElementById('enableAudio').checked;
 
+    try {
+        // Get the new media stream based on updated settings
+        let newStream;
+        if (enableVideo || enableAudio) {
+            newStream = await navigator.mediaDevices.getUserMedia({
+                video: enableVideo,
+                audio: enableAudio
+            });
+        } else {
+            newStream = new MediaStream();
+        }
+
+        // Update local video display
+        const localVideo = document.getElementById('localVideo');
+        if (enableVideo) {
+            localVideo.srcObject = newStream;
+            localVideo.style.display = 'block';
+        } else {
+            localVideo.srcObject = null;
+            localVideo.style.display = 'none';
+        }
+
+        // Replace tracks in the RTCPeerConnections
+        updatePeerConnections(newStream);
+
+        // Stop the old tracks
+        if (localStream) {
+            localStream.getTracks().forEach(track => track.stop());
+        }
+
+        // Update the localStream reference
+        localStream = newStream;
+
+        console.log('Media toggled. Video:', enableVideo, 'Audio:', enableAudio);
+    } catch (err) {
+        console.error('Error toggling media:', err);
+        alert('Could not access camera or microphone. Please check permissions.');
+    }
+}
+
+// Function to update tracks in all peer connections
+function updatePeerConnections(newStream) {
+    for (const peerId in peers) {
+        const peerConnection = peers[peerId];
+
+        // Get the senders for audio and video tracks
+        const senders = peerConnection.getSenders();
+
+        // Replace or remove video track
+        const videoSender = senders.find(sender => sender.track && sender.track.kind === 'video');
+        const newVideoTrack = newStream.getVideoTracks()[0];
+
+        if (videoSender && newVideoTrack) {
+            videoSender.replaceTrack(newVideoTrack);
+        } else if (videoSender && !newVideoTrack) {
+            peerConnection.removeTrack(videoSender);
+        } else if (!videoSender && newVideoTrack) {
+            peerConnection.addTrack(newVideoTrack, newStream);
+        }
+
+        // Replace or remove audio track
+        const audioSender = senders.find(sender => sender.track && sender.track.kind === 'audio');
+        const newAudioTrack = newStream.getAudioTracks()[0];
+
+        if (audioSender && newAudioTrack) {
+            audioSender.replaceTrack(newAudioTrack);
+        } else if (audioSender && !newAudioTrack) {
+            peerConnection.removeTrack(audioSender);
+        } else if (!audioSender && newAudioTrack) {
+            peerConnection.addTrack(newAudioTrack, newStream);
+        }
+    }
+}
+function leaveConference() {
+    // Send a "leave" message to other participants
+    sendMqttMessage({ type: 'leave' }, null, () => {
+        console.log('Leave message sent to other participants.');
+
+        // Close all RTCPeerConnections
+        closeAllConnections();
+
+        // Unsubscribe from MQTT topic and disconnect
+        const meetingId = document.getElementById('meetingId').value;
+        const mqttTopic = mqttTopicPrefix + meetingId;
+
+        mqttClient.unsubscribe(mqttTopic, (err) => {
+            if (err) {
+                console.error('Error unsubscribing from MQTT topic:', err);
+            } else {
+                console.log('Unsubscribed from MQTT topic');
+            }
+
+            mqttClient.end(false, () => {
+                console.log('MQTT client disconnected');
+
+                // Clear remote videos
+                for (const peerId in remoteVideoContainers) {
+                    const videoWrapper = remoteVideoContainers[peerId];
+                    if (videoWrapper && videoWrapper.parentElement) {
+                        videoWrapper.parentElement.removeChild(videoWrapper);
+                    }
+                    delete remoteVideoContainers[peerId];
+                }
+
+                // Stop local media stream
+                if (localStream) {
+                    localStream.getTracks().forEach(track => track.stop());
+                    localStream = null;
+                }
+
+                // Reset local video element
+                const localVideo = document.getElementById('localVideo');
+                localVideo.srcObject = null;
+                localVideo.style.display = 'none';
+
+                // Clear data structures
+                peers = {};
+                peerStates = {};
+                peerStreams = {};
+                peerActivity = {};
+
+                console.log('Left the conference');
+            });
+        });
+    });
+}
+document.getElementById('enableVideo').addEventListener('change', handleMediaToggle);
+document.getElementById('enableAudio').addEventListener('change', handleMediaToggle);
 // Add event listener to the Join Conference button
-document.getElementById('joinButton').addEventListener('click', () => {
-    joinConference();
+document.getElementById('joinButton').addEventListener('click', async () => {
+    await joinConference();
+    document.getElementById('joinButton').disabled = true;
+    document.getElementById('leaveButton').disabled = false;
 });
 
+// Add event listener to the Leave Conference button
+document.getElementById('leaveButton').addEventListener('click', () => {
+    leaveConference();
+    document.getElementById('joinButton').disabled = false;
+    document.getElementById('leaveButton').disabled = true;
+});
 // Define the MQTT broker URL and topic prefix
 const mqttBroker = 'wss://mqtt-dashboard.com:8884/mqtt'; // Replace with your MQTT broker URL
 const mqttTopicPrefix = 'webrtc/';

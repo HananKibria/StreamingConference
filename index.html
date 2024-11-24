@@ -14,7 +14,20 @@
         <div class="form-group">
             <label for="meetingId">Meeting ID:</label>
             <input type="text" id="meetingId" placeholder="Enter Meeting ID">
+        </div>
+        <div class="form-group">
+            <label>
+                <input type="checkbox" id="enableVideo" checked>
+                Enable Camera
+            </label>
+            <label>
+                <input type="checkbox" id="enableAudio" checked>
+                Enable Microphone
+            </label>
+        </div>
+        <div class="form-group">
             <button id="joinButton">Join Conference</button>
+            <button id="leaveButton" disabled>Leave Conference</button>
         </div>
         <div class="video-container">
             <div class="video-wrapper local-video">
