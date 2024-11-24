@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>WebRTC Video Conferencing</title>
+    <!-- Styles and other head elements -->
+</head>
+<body>
+    <div class="container">
+        <h1>WebRTC Video Conferencing</h1>
+        <div class="form-group">
+            <label for="meetingId">Meeting ID:</label>
+            <input type="text" id="meetingId" placeholder="Enter Meeting ID">
+        </div>
+        <!-- Removed role selection -->
+        <div class="form-group">
+            <button id="joinButton">Join Conference</button>
+        </div>
+        <div class="video-container">
+            <div class="local-video">
+                <h2>Local Video</h2>
+                <video id="localVideo" autoplay playsinline muted></video>
+            </div>
+            <div class="remote-video">
+                <h2>Remote Video</h2>
+                <video id="remoteVideo" autoplay playsinline></video>
+            </div>
+        </div>
+    </div>
+
+    <!-- Include the MQTT library -->
+    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- Include your main JavaScript code -->
+    <script src="script.js"></script>
+    <!-- Initialize the application -->
+    <script>
+        // Define the MQTT broker URL and topic prefix
+        const mqttBroker = 'wss://mqtt-dashboard.com:8884/mqtt'; // Replace with your MQTT broker URL
+        const mqttTopicPrefix = 'webrtc/';
+
+        // Function to set up local media (camera and microphone)
+        async function setupLocalMedia() {
+            try {
+                const localStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                const localVideo = document.getElementById('localVideo');
+                localVideo.srcObject = localStream;
+
+                // Add tracks to the RTCPeerConnection
+                localStream.getTracks().forEach(track => {
+                    rtcConnection.addTrack(track, localStream);
+                });
+            } catch (err) {
+                console.error('Error accessing local media:', err);
+            }
+        }
+
+        // Add event listener to the Join Conference button
+        document.getElementById('joinButton').addEventListener('click', () => {
+            joinConference();
+        });
+    </script>
+</body>
+</html>
