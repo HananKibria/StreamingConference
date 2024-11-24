@@ -2,11 +2,12 @@
 
 let mqttClient;
 let localId;
-const peers = {}; // Object to hold RTCPeerConnections keyed by peer ID
-const peerStreams = {}; // Object to hold MediaStreams from each peer
-const remoteVideoContainers = {}; // Object to hold video elements for each peer
+const peers = {}; // Holds RTCPeerConnections keyed by peer ID
+const peerStates = {}; // Holds negotiation flags per peer
+const peerStreams = {}; // Holds MediaStreams from each peer
+const remoteVideoContainers = {}; // Holds video elements for each peer
 let localStream; // Global variable for local media stream
-const peerActivity = {}; // Object to track the last activity time of peers
+const peerActivity = {}; // Tracks the last activity time of peers
 
 // Generate a unique ID for this peer
 function generateUniqueId() {
@@ -45,14 +46,21 @@ function createPeerConnection(peerId) {
 
     // Handle negotiation needed
     peerConnection.onnegotiationneeded = async () => {
-        console.log(`Negotiation needed with peer ${peerId}`);
-        await makeOffer(peerId);
+        const state = peerStates[peerId];
+        try {
+            state.makingOffer = true;
+            await makeOffer(peerId);
+        } catch (err) {
+            console.error(`Error during negotiation with peer ${peerId}:`, err);
+        } finally {
+            state.makingOffer = false;
+        }
     };
 
     // Handle connection state change
     peerConnection.onconnectionstatechange = () => {
         console.log(`Connection state with peer ${peerId}: ${peerConnection.connectionState}`);
-        if (peerConnection.connectionState === 'disconnected' || peerConnection.connectionState === 'failed' || peerConnection.connectionState === 'closed') {
+        if (['disconnected', 'failed', 'closed'].includes(peerConnection.connectionState)) {
             removePeer(peerId);
         }
     };
@@ -62,7 +70,6 @@ function createPeerConnection(peerId) {
 
 // Function to initiate connection with a new peer
 function initiateConnectionWithPeer(peerId) {
-    // Avoid duplicate connections
     if (peers[peerId]) return;
 
     console.log(`Initiating connection with peer ${peerId}`);
@@ -71,15 +78,19 @@ function initiateConnectionWithPeer(peerId) {
     const peerConnection = createPeerConnection(peerId);
     peers[peerId] = peerConnection;
 
+    // Initialize peer negotiation state
+    peerStates[peerId] = {
+        makingOffer: false,
+        ignoreOffer: false,
+        isSettingRemoteAnswerPending: false,
+        polite: localId < peerId, // The peer with the lower ID is polite
+        pendingCandidates: []
+    };
+
     // Add local tracks to the connection
     localStream.getTracks().forEach(track => {
         peerConnection.addTrack(track, localStream);
     });
-
-    // Start negotiation if needed
-    if (peerConnection.signalingState === 'stable') {
-        makeOffer(peerId);
-    }
 
     // Initialize peer activity timestamp
     peerActivity[peerId] = Date.now();
@@ -88,7 +99,10 @@ function initiateConnectionWithPeer(peerId) {
 // Function to make an offer to a peer
 async function makeOffer(peerId) {
     const peerConnection = peers[peerId];
+    const state = peerStates[peerId];
+
     try {
+        state.makingOffer = true;
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
         console.log(`Created and set local offer for peer ${peerId}`);
@@ -99,6 +113,8 @@ async function makeOffer(peerId) {
         }, peerId);
     } catch (err) {
         console.error(`Error creating offer for peer ${peerId}:`, err);
+    } finally {
+        state.makingOffer = false;
     }
 }
 
@@ -106,33 +122,67 @@ async function makeOffer(peerId) {
 async function handleSdpMessage(peerId, sdp) {
     const peerConnection = peers[peerId] || createPeerConnection(peerId);
     peers[peerId] = peerConnection;
+    const state = peerStates[peerId];
 
+    const offerCollision = sdp.type === 'offer' &&
+        (state.makingOffer || peerConnection.signalingState !== 'stable');
+
+    state.ignoreOffer = !state.polite && offerCollision;
+    if (state.ignoreOffer) {
+        console.warn(`Ignored an incoming offer from peer ${peerId} due to collision`);
+        return;
+    }
+
+    state.isSettingRemoteAnswerPending = sdp.type === 'answer';
     try {
         await peerConnection.setRemoteDescription(sdp);
-        console.log(`Set remote description for peer ${peerId}`);
+        state.isSettingRemoteAnswerPending = false;
 
-        if (sdp.type === 'offer') {
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
+        // Process any buffered ICE candidates
+        if (state.pendingCandidates.length > 0) {
+            console.log(`Adding buffered ICE candidates for peer ${peerId}`);
+            for (const candidate of state.pendingCandidates) {
+                await peerConnection.addIceCandidate(candidate);
+                console.log(`Added buffered ICE candidate for peer ${peerId}`);
+            }
+            state.pendingCandidates = [];
+        }
+
+    } catch (err) {
+        console.error(`Error setting remote description for peer ${peerId}:`, err);
+        state.isSettingRemoteAnswerPending = false;
+        return;
+    }
+
+    if (sdp.type === 'offer') {
+        try {
+            await peerConnection.setLocalDescription(await peerConnection.createAnswer());
             console.log(`Created and set local answer for peer ${peerId}`);
             sendMqttMessage({
                 type: 'sdp',
                 sdp: peerConnection.localDescription.sdp,
                 sdpType: peerConnection.localDescription.type
             }, peerId);
+        } catch (err) {
+            console.error(`Error creating and sending answer to peer ${peerId}:`, err);
         }
-    } catch (err) {
-        console.error(`Error handling SDP message for peer ${peerId}:`, err);
     }
 }
 
 // Function to handle ICE candidates
 async function handleIceCandidate(peerId, candidate) {
     const peerConnection = peers[peerId];
+    const state = peerStates[peerId];
     if (peerConnection) {
         try {
-            await peerConnection.addIceCandidate(candidate);
-            console.log(`Added ICE candidate for peer ${peerId}`);
+            if (peerConnection.remoteDescription && peerConnection.remoteDescription.type) {
+                await peerConnection.addIceCandidate(candidate);
+                console.log(`Added ICE candidate for peer ${peerId}`);
+            } else {
+                // Buffer the candidate
+                state.pendingCandidates.push(candidate);
+                console.log(`Buffered ICE candidate for peer ${peerId}`);
+            }
         } catch (err) {
             console.error(`Error adding ICE candidate for peer ${peerId}:`, err);
         }
@@ -140,7 +190,6 @@ async function handleIceCandidate(peerId, candidate) {
         console.warn(`PeerConnection not found for peer ${peerId}`);
     }
 }
-
 // Function to attach a remote stream to a video element
 function attachRemoteStream(peerId, stream) {
     let remoteVideo = remoteVideoContainers[peerId];
