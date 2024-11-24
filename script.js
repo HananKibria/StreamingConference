@@ -88,13 +88,27 @@ function initiateConnectionWithPeer(peerId) {
     };
 
     // Add local tracks to the connection if any
-    localStream.getTracks().forEach(track => {
-        peerConnection.addTrack(track, localStream);
-    });
+    let currentVideoTrack;
+    if (isScreenSharing && screenStream && screenStream.getVideoTracks().length > 0) {
+        currentVideoTrack = screenStream.getVideoTracks()[0];
+    } else if (localStream && localStream.getVideoTracks().length > 0) {
+        currentVideoTrack = localStream.getVideoTracks()[0];
+    }
+
+    if (currentVideoTrack) {
+        peerConnection.addTrack(currentVideoTrack, new MediaStream([currentVideoTrack]));
+    }
+
+    // Add audio track if available
+    if (localStream && localStream.getAudioTracks().length > 0) {
+        const audioTrack = localStream.getAudioTracks()[0];
+        peerConnection.addTrack(audioTrack, localStream);
+    }
 
     // Initialize peer activity timestamp
     peerActivity[peerId] = Date.now();
 }
+
 // Function to make an offer to a peer
 async function makeOffer(peerId) {
     const peerConnection = peers[peerId];
@@ -418,26 +432,25 @@ async function handleMediaToggle() {
             newStream = new MediaStream();
         }
 
-        // Update local video display
-        const localVideo = document.getElementById('localVideo');
-        if (enableVideo) {
-            localVideo.srcObject = newStream;
-            localVideo.style.display = 'block';
-        } else {
-            localVideo.srcObject = null;
-            localVideo.style.display = 'none';
-        }
-
-        // Replace tracks in the RTCPeerConnections
-        updatePeerConnections(newStream);
-
-        // Stop the old tracks
+        // Update localStream reference
         if (localStream) {
             localStream.getTracks().forEach(track => track.stop());
         }
-
-        // Update the localStream reference
         localStream = newStream;
+
+        // Update audio tracks in peer connections
+        updatePeerConnections(newStream);
+
+        // If not screen sharing, update video track
+        if (!isScreenSharing) {
+            if (enableVideo) {
+                updateLocalVideo(localStream);
+                replaceVideoTrack(localStream.getVideoTracks()[0]);
+            } else {
+                updateLocalVideo(null);
+                stopSendingVideoTrack();
+            }
+        }
 
         console.log('Media toggled. Video:', enableVideo, 'Audio:', enableAudio);
     } catch (err) {
@@ -446,13 +459,17 @@ async function handleMediaToggle() {
     }
 }
 
+
 // Function to update tracks in all peer connections
 function updatePeerConnections(newStream) {
     for (const peerId in peers) {
         const peerConnection = peers[peerId];
+        const state = peerStates[peerId];
 
         // Get the senders for audio and video tracks
         const senders = peerConnection.getSenders();
+
+        let renegotiationNeeded = false;
 
         // Replace or remove video track
         const videoSender = senders.find(sender => sender.track && sender.track.kind === 'video');
@@ -460,10 +477,15 @@ function updatePeerConnections(newStream) {
 
         if (videoSender && newVideoTrack) {
             videoSender.replaceTrack(newVideoTrack);
+            console.log(`Replaced video track for peer ${peerId}`);
         } else if (videoSender && !newVideoTrack) {
             peerConnection.removeTrack(videoSender);
+            console.log(`Removed video track for peer ${peerId}`);
+            renegotiationNeeded = true;
         } else if (!videoSender && newVideoTrack) {
             peerConnection.addTrack(newVideoTrack, newStream);
+            console.log(`Added video track for peer ${peerId}`);
+            renegotiationNeeded = true;
         }
 
         // Replace or remove audio track
@@ -472,10 +494,21 @@ function updatePeerConnections(newStream) {
 
         if (audioSender && newAudioTrack) {
             audioSender.replaceTrack(newAudioTrack);
+            console.log(`Replaced audio track for peer ${peerId}`);
         } else if (audioSender && !newAudioTrack) {
             peerConnection.removeTrack(audioSender);
+            console.log(`Removed audio track for peer ${peerId}`);
+            renegotiationNeeded = true;
         } else if (!audioSender && newAudioTrack) {
             peerConnection.addTrack(newAudioTrack, newStream);
+            console.log(`Added audio track for peer ${peerId}`);
+            renegotiationNeeded = true;
+        }
+
+        // Initiate renegotiation if needed
+        if (renegotiationNeeded && peerConnection.signalingState === 'stable' && !state.makingOffer) {
+            console.log(`Initiating renegotiation with peer ${peerId} due to track changes`);
+            renegotiate(peerId);
         }
     }
 }
@@ -532,13 +565,142 @@ function leaveConference() {
         });
     });
 }
+let isScreenSharing = false;
+let screenStream;
+function replaceVideoTrack(newTrack) {
+    for (const peerId in peers) {
+        const peerConnection = peers[peerId];
+        const state = peerStates[peerId];
+
+        // Get the sender for the video track
+        const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+
+        if (sender) {
+            sender.replaceTrack(newTrack).then(() => {
+                console.log(`Replaced video track for peer ${peerId}`);
+
+                // Initiate renegotiation if the signaling state is stable
+                if (peerConnection.signalingState === 'stable' && !state.makingOffer) {
+                    renegotiate(peerId);
+                }
+            }).catch(error => {
+                console.error(`Error replacing video track for peer ${peerId}:`, error);
+            });
+        } else {
+            // If there is no video sender, add the new track
+            peerConnection.addTrack(newTrack, new MediaStream([newTrack]));
+
+            // Initiate renegotiation
+            if (peerConnection.signalingState === 'stable' && !state.makingOffer) {
+                renegotiate(peerId);
+            }
+        }
+    }
+}
+function renegotiate(peerId) {
+    const peerConnection = peers[peerId];
+    const state = peerStates[peerId];
+
+    if (state.makingOffer) {
+        console.log(`Already making an offer to peer ${peerId}, skipping renegotiation`);
+        return;
+    }
+
+    state.makingOffer = true;
+
+    peerConnection.createOffer().then(offer => {
+        return peerConnection.setLocalDescription(offer);
+    }).then(() => {
+        console.log(`Created and set local offer for peer ${peerId} during renegotiation`);
+        sendMqttMessage({
+            type: 'sdp',
+            sdp: peerConnection.localDescription.sdp,
+            sdpType: peerConnection.localDescription.type
+        }, peerId);
+    }).catch(err => {
+        console.error(`Error during renegotiation with peer ${peerId}:`, err);
+    }).finally(() => {
+        state.makingOffer = false;
+    });
+}
+
+function updateLocalVideo(stream) {
+    const localVideo = document.getElementById('localVideo');
+    if (stream) {
+        localVideo.srcObject = stream;
+        localVideo.style.display = 'block';
+    } else {
+        localVideo.srcObject = null;
+        localVideo.style.display = 'none';
+    }
+}
+function stopSendingVideoTrack() {
+    for (const peerId in peers) {
+        const peerConnection = peers[peerId];
+
+        // Get the sender for the video track
+        const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+
+        if (sender) {
+            peerConnection.removeTrack(sender);
+        }
+    }
+}
+async function handleScreenShareToggle() {
+    if (!isScreenSharing) {
+        // Start screen sharing
+        try {
+            screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            isScreenSharing = true;
+            document.getElementById('screenShareButton').textContent = 'Stop Screen Share';
+            updateLocalVideo(screenStream);
+            replaceVideoTrack(screenStream.getVideoTracks()[0]);
+            console.log('Screen sharing started.');
+            
+            // Handle the event when the user stops screen sharing using browser UI
+            screenStream.getVideoTracks()[0].addEventListener('ended', () => {
+                console.log('Screen sharing stopped by user.');
+                handleScreenShareToggle(); // Stop screen sharing
+            });
+        } catch (err) {
+            console.error('Error starting screen sharing:', err);
+            alert('Failed to start screen sharing.');
+        }
+    } else {
+        // Stop screen sharing
+        isScreenSharing = false;
+        document.getElementById('screenShareButton').textContent = 'Start Screen Share';
+
+        // Revert to the camera stream if available
+        if (localStream && localStream.getVideoTracks().length > 0) {
+            updateLocalVideo(localStream);
+            replaceVideoTrack(localStream.getVideoTracks()[0]);
+            console.log('Reverted to camera stream.');
+        } else {
+            // No camera stream available
+            stopSendingVideoTrack();
+            updateLocalVideo(null);
+            console.log('No camera stream available.');
+        }
+
+        // Stop the screen stream
+        if (screenStream) {
+            screenStream.getTracks().forEach(track => track.stop());
+            screenStream = null;
+        }
+    }
+}
+
 document.getElementById('enableVideo').addEventListener('change', handleMediaToggle);
 document.getElementById('enableAudio').addEventListener('change', handleMediaToggle);
+document.getElementById('screenShareButton').addEventListener('click', handleScreenShareToggle);
+
 // Add event listener to the Join Conference button
 document.getElementById('joinButton').addEventListener('click', async () => {
     await joinConference();
     document.getElementById('joinButton').disabled = true;
     document.getElementById('leaveButton').disabled = false;
+    document.getElementById('screenShareButton').disabled = false;
 });
 
 // Add event listener to the Leave Conference button
@@ -546,6 +708,8 @@ document.getElementById('leaveButton').addEventListener('click', () => {
     leaveConference();
     document.getElementById('joinButton').disabled = false;
     document.getElementById('leaveButton').disabled = true;
+    document.getElementById('screenShareButton').disabled = true;
+
 });
 // Define the MQTT broker URL and topic prefix
 const mqttBroker = 'wss://mqtt-dashboard.com:8884/mqtt'; // Replace with your MQTT broker URL

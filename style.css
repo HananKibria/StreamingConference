@@ -1,100 +1,152 @@
 /* style.css */
 
-/* General Styles */
-body {
+/* Reset some basic elements for consistency across browsers */
+* {
     margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+/* Set the font family for the entire document */
+body {
     font-family: 'Roboto', sans-serif;
-    background-color: #f5f5f5;
-}
-
-.container {
-    width: 90%;
-    max-width: 1200px;
-    margin: auto;
-    padding: 20px;
-    text-align: center;
-}
-
-h1 {
-    margin-bottom: 30px;
+    background-color: #f4f4f4;
     color: #333;
 }
 
+/* Container for the main content */
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* Main heading */
+h1 {
+    text-align: center;
+    margin-bottom: 30px;
+    font-weight: 500;
+    color: #333;
+}
+
+/* Form group styles */
 .form-group {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
     margin-bottom: 20px;
 }
 
 .form-group label {
-    font-size: 18px;
-    margin-right: 10px;
+    margin: 5px 10px;
+    font-size: 16px;
+    color: #333;
 }
 
-.form-group input {
-    padding: 8px 12px;
+.form-group input[type="text"] {
+    padding: 10px;
     font-size: 16px;
-    width: 200px;
-    margin-right: 10px;
+    margin: 5px 10px;
     border: 1px solid #ccc;
     border-radius: 4px;
 }
 
+/* Style for checkboxes */
+.form-group input[type="checkbox"] {
+    margin-right: 5px;
+}
+
+/* Buttons styles */
 .form-group button {
-    padding: 8px 16px;
+    padding: 10px 20px;
+    margin: 5px 10px;
     font-size: 16px;
-    background-color: #007bff;
+    font-weight: 500;
     color: #fff;
+    background-color: #007bff;
     border: none;
     border-radius: 4px;
     cursor: pointer;
+    transition: background-color 0.3s ease;
 }
 
-.form-group button:hover {
+.form-group button:disabled {
+    background-color: #aaa;
+    cursor: not-allowed;
+}
+
+.form-group button:hover:not(:disabled) {
     background-color: #0056b3;
 }
 
+/* Video container styles */
 .video-container {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
+    align-items: flex-start;
 }
 
-.video-wrapper {
+/* Local video wrapper */
+.local-video {
+    width: 300px;
     margin: 10px;
-    background-color: #fff;
-    border-radius: 8px;
-    overflow: hidden;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
 }
 
-.video-wrapper h2 {
-    background-color: #007bff;
-    color: #fff;
-    margin: 0;
-    padding: 8px;
+.local-video h2 {
+    text-align: center;
+    margin-bottom: 10px;
     font-size: 18px;
+    font-weight: 500;
 }
 
-.video-wrapper video {
-    display: block;
-    width: 320px;
-    height: 240px;
-    background-color: #000;
-}
-
+/* Remote videos container */
 .remote-videos {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
-    margin-top: 20px;
-}
-
-.remote-videos .video-wrapper {
+    width: calc(100% - 320px);
     margin: 10px;
 }
 
-@media (max-width: 768px) {
-    .video-wrapper video {
+/* Remote video wrapper */
+.video-wrapper {
+    width: 300px;
+    margin: 10px;
+}
+
+.video-wrapper h2 {
+    text-align: center;
+    margin-bottom: 10px;
+    font-size: 18px;
+    font-weight: 500;
+}
+
+/* Video element styles */
+video {
+    width: 100%;
+    height: auto;
+    background-color: #000;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+/* Responsive design */
+@media screen and (max-width: 768px) {
+    .form-group {
+        flex-direction: column;
+    }
+
+    .local-video,
+    .video-wrapper {
         width: 100%;
-        height: auto;
+        max-width: 100%;
+    }
+
+    .remote-videos {
+        width: 100%;
+        flex-direction: column;
+        align-items: center;
     }
 }
