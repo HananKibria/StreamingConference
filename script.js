@@ -3,11 +3,12 @@
 let mqttClient;
 let localId;
 let peers = {}; // Holds RTCPeerConnections keyed by peer ID
-let peerStates = {}; // Holds negotiation flags per peer
+let peerStates = {}; // Holds negotiation flags and transceivers per peer
 let peerStreams = {}; // Holds MediaStreams from each peer
 let remoteVideoContainers = {}; // Holds video elements for each peer
 let localStream; // Global variable for local media stream
 let peerActivity = {}; // Tracks the last activity time of peers
+let isLocalMediaReady = false; // Flag to indicate local media readiness
 
 // Generate a unique ID for this peer
 function generateUniqueId() {
@@ -22,6 +23,17 @@ function createPeerConnection(peerId) {
     const configuration = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
     const peerConnection = new RTCPeerConnection(configuration);
     console.log(`RTCPeerConnection created for peer ${peerId}:`, peerConnection);
+
+    // Initialize peerStates for this peer if not already done
+    if (!peerStates[peerId]) {
+        peerStates[peerId] = {};
+    }
+
+    // Add transceivers for audio and video
+    const videoTransceiver = peerConnection.addTransceiver('video', { direction: 'sendrecv' });
+    const audioTransceiver = peerConnection.addTransceiver('audio', { direction: 'sendrecv' });
+    peerStates[peerId].videoTransceiver = videoTransceiver;
+    peerStates[peerId].audioTransceiver = audioTransceiver;
 
     // Handle ICE candidates
     peerConnection.onicecandidate = (event) => {
@@ -42,12 +54,23 @@ function createPeerConnection(peerId) {
         }
         peerStreams[peerId].addTrack(event.track);
         attachRemoteStream(peerId, peerStreams[peerId]);
+
+        event.track.addEventListener('mute', () => {
+            console.log(`Track muted from peer ${peerId}:`, event.track.kind);
+            // Optional: Display a placeholder or black screen
+        });
+
+        event.track.addEventListener('unmute', () => {
+            console.log(`Track unmuted from peer ${peerId}:`, event.track.kind);
+            // Optional: Update the UI if necessary
+        });
     };
 
     // Handle negotiation needed
     peerConnection.onnegotiationneeded = async () => {
         const state = peerStates[peerId];
         try {
+            if (state.makingOffer) return;
             state.makingOffer = true;
             await makeOffer(peerId);
         } catch (err) {
@@ -72,11 +95,12 @@ function createPeerConnection(peerId) {
 function initiateConnectionWithPeer(peerId) {
     if (peers[peerId]) return;
 
-    console.log(`Initiating connection with peer ${peerId}`);
+    if (!localStream) {
+        console.warn(`Local media not ready when initiating connection with peer ${peerId}`);
+        return;
+    }
 
-    // Create a new RTCPeerConnection for this peer
-    const peerConnection = createPeerConnection(peerId);
-    peers[peerId] = peerConnection;
+    console.log(`Initiating connection with peer ${peerId}`);
 
     // Initialize peer negotiation state
     peerStates[peerId] = {
@@ -87,7 +111,11 @@ function initiateConnectionWithPeer(peerId) {
         pendingCandidates: []
     };
 
-    // Add local tracks to the connection if any
+    // Create a new RTCPeerConnection for this peer
+    const peerConnection = createPeerConnection(peerId);
+    peers[peerId] = peerConnection;
+
+    // Add local tracks to the transceivers
     let currentVideoTrack;
     if (isScreenSharing && screenStream && screenStream.getVideoTracks().length > 0) {
         currentVideoTrack = screenStream.getVideoTracks()[0];
@@ -96,13 +124,23 @@ function initiateConnectionWithPeer(peerId) {
     }
 
     if (currentVideoTrack) {
-        peerConnection.addTrack(currentVideoTrack, new MediaStream([currentVideoTrack]));
+        peerStates[peerId].videoTransceiver.sender.replaceTrack(currentVideoTrack);
+        peerStates[peerId].videoTransceiver.direction = 'sendrecv';
+    } else {
+        // If there's no video track, replace with null and set direction to 'recvonly'
+        peerStates[peerId].videoTransceiver.sender.replaceTrack(null);
+        peerStates[peerId].videoTransceiver.direction = 'recvonly';
     }
 
     // Add audio track if available
     if (localStream && localStream.getAudioTracks().length > 0) {
         const audioTrack = localStream.getAudioTracks()[0];
-        peerConnection.addTrack(audioTrack, localStream);
+        peerStates[peerId].audioTransceiver.sender.replaceTrack(audioTrack);
+        peerStates[peerId].audioTransceiver.direction = 'sendrecv';
+    } else {
+        // If there's no audio track, replace with null and set direction to 'recvonly'
+        peerStates[peerId].audioTransceiver.sender.replaceTrack(null);
+        peerStates[peerId].audioTransceiver.direction = 'recvonly';
     }
 
     // Initialize peer activity timestamp
@@ -133,6 +171,10 @@ async function makeOffer(peerId) {
 
 // Function to handle incoming SDP messages
 async function handleSdpMessage(peerId, sdp) {
+    if (!localStream) {
+        console.warn(`Local media not ready when handling SDP message from peer ${peerId}`);
+        await setupLocalMedia();
+    }
     const peerConnection = peers[peerId] || createPeerConnection(peerId);
     peers[peerId] = peerConnection;
     const state = peerStates[peerId];
@@ -203,6 +245,7 @@ async function handleIceCandidate(peerId, candidate) {
         console.warn(`PeerConnection not found for peer ${peerId}`);
     }
 }
+
 // Function to attach a remote stream to a video element
 function attachRemoteStream(peerId, stream) {
     let remoteVideoWrapper = remoteVideoContainers[peerId];
@@ -248,6 +291,8 @@ function sendMqttMessage(payload, recipientId = null, callback = () => {}) {
 
 // Function to join the conference
 async function joinConference() {
+    await setupLocalMedia(); // Ensure localStream is ready
+
     mqttClient = mqtt.connect(mqttBroker);
     const meetingId = document.getElementById('meetingId').value;
     const mqttTopic = mqttTopicPrefix + meetingId;
@@ -260,7 +305,19 @@ async function joinConference() {
         sendMqttMessage({ type: 'new-peer' });
     });
 
-    mqttClient.on('message', (topic, message) => {
+    mqttClient.on('message', async (topic, message) => {
+        if (!isLocalMediaReady) {
+            console.log('Local media not ready, delaying message processing');
+            await new Promise(resolve => {
+                const checkInterval = setInterval(() => {
+                    if (isLocalMediaReady) {
+                        clearInterval(checkInterval);
+                        resolve();
+                    }
+                }, 100);
+            });
+        }
+
         const payload = JSON.parse(message);
         if (payload.sender === localId) return; // Ignore self-messages
         if (payload.recipient && payload.recipient !== localId) return; // Ignore messages not intended for this peer
@@ -274,11 +331,8 @@ async function joinConference() {
             console.log(`Received ping from peer ${senderId}`);
             return; // No further processing needed for ping messages
         }
-    
+
         // Update peer activity timestamp for other message types
-        peerActivity[senderId] = Date.now();
-    
-        // Update peer activity timestamp
         peerActivity[senderId] = Date.now();
 
         if (payload.type === 'new-peer') {
@@ -303,11 +357,8 @@ async function joinConference() {
         }
     });
 
-    await setupLocalMedia();
-
     // Start monitoring peer activity
     setInterval(checkPeerActivity, 10000); // Check every 10 seconds
-
     setInterval(sendPingToPeers, 5000); // Every 5 seconds
 
     // Handle page unload to send "leave" message
@@ -350,6 +401,8 @@ async function setupLocalMedia() {
 
         // Create an empty stream if access is denied
         localStream = new MediaStream();
+    } finally {
+        isLocalMediaReady = true;
     }
 }
 
@@ -388,6 +441,7 @@ function removePeer(peerId) {
         delete peerStates[peerId];
     }
 }
+
 // Function to check peer activity and remove inactive peers
 function checkPeerActivity() {
     const currentTime = Date.now();
@@ -400,22 +454,52 @@ function checkPeerActivity() {
         }
     }
 }
+
 function sendPingToPeers() {
     for (const peerId in peers) {
         sendMqttMessage({ type: 'ping' }, peerId);
         console.log(`Sent ping to peer ${peerId}`);
     }
 }
+
 // Function to close all connections when leaving the conference
 function closeAllConnections() {
     for (const peerId in peers) {
         if (peers[peerId]) {
             peers[peerId].close();
             delete peers[peerId];
-
         }
     }
 }
+
+// Function to renegotiate the peer connection
+function renegotiate(peerId) {
+    const peerConnection = peers[peerId];
+    const state = peerStates[peerId];
+
+    if (state.makingOffer) {
+        console.log(`Already making an offer to peer ${peerId}, skipping renegotiation`);
+        return;
+    }
+
+    state.makingOffer = true;
+
+    peerConnection.createOffer().then(offer => {
+        return peerConnection.setLocalDescription(offer);
+    }).then(() => {
+        console.log(`Created and set local offer for peer ${peerId} during renegotiation`);
+        sendMqttMessage({
+            type: 'sdp',
+            sdp: peerConnection.localDescription.sdp,
+            sdpType: peerConnection.localDescription.type
+        }, peerId);
+    }).catch(err => {
+        console.error(`Error during renegotiation with peer ${peerId}:`, err);
+    }).finally(() => {
+        state.makingOffer = false;
+    });
+}
+
 async function handleMediaToggle() {
     const enableVideo = document.getElementById('enableVideo').checked;
     const enableAudio = document.getElementById('enableAudio').checked;
@@ -438,17 +522,15 @@ async function handleMediaToggle() {
         }
         localStream = newStream;
 
-        // Update audio tracks in peer connections
+        // Update tracks in peer connections
         updatePeerConnections(newStream);
 
-        // If not screen sharing, update video track
+        // Update local video display
         if (!isScreenSharing) {
             if (enableVideo) {
                 updateLocalVideo(localStream);
-                replaceVideoTrack(localStream.getVideoTracks()[0]);
             } else {
                 updateLocalVideo(null);
-                stopSendingVideoTrack();
             }
         }
 
@@ -459,59 +541,63 @@ async function handleMediaToggle() {
     }
 }
 
-
 // Function to update tracks in all peer connections
 function updatePeerConnections(newStream) {
     for (const peerId in peers) {
         const peerConnection = peers[peerId];
         const state = peerStates[peerId];
 
-        // Get the senders for audio and video tracks
-        const senders = peerConnection.getSenders();
-
         let renegotiationNeeded = false;
 
-        // Replace or remove video track
-        const videoSender = senders.find(sender => sender.track && sender.track.kind === 'video');
-        const newVideoTrack = newStream.getVideoTracks()[0];
+        // Update video track
+        const newVideoTrack = newStream.getVideoTracks()[0] || null;
+        if (state.videoTransceiver) {
+            state.videoTransceiver.sender.replaceTrack(newVideoTrack).then(() => {
+                console.log(`Replaced video track for peer ${peerId}`);
+            }).catch(error => {
+                console.error(`Error replacing video track for peer ${peerId}:`, error);
+            });
 
-        if (videoSender && newVideoTrack) {
-            videoSender.replaceTrack(newVideoTrack);
-            console.log(`Replaced video track for peer ${peerId}`);
-        } else if (videoSender && !newVideoTrack) {
-            peerConnection.removeTrack(videoSender);
-            console.log(`Removed video track for peer ${peerId}`);
+            // Set transceiver direction
+            if (newVideoTrack) {
+                state.videoTransceiver.direction = 'sendrecv';
+            } else {
+                state.videoTransceiver.direction = 'recvonly';
+            }
+
             renegotiationNeeded = true;
-        } else if (!videoSender && newVideoTrack) {
-            peerConnection.addTrack(newVideoTrack, newStream);
-            console.log(`Added video track for peer ${peerId}`);
-            renegotiationNeeded = true;
+        } else {
+            console.warn(`No video transceiver for peer ${peerId}`);
         }
 
-        // Replace or remove audio track
-        const audioSender = senders.find(sender => sender.track && sender.track.kind === 'audio');
-        const newAudioTrack = newStream.getAudioTracks()[0];
+        // Update audio track
+        const newAudioTrack = newStream.getAudioTracks()[0] || null;
+        if (state.audioTransceiver) {
+            state.audioTransceiver.sender.replaceTrack(newAudioTrack).then(() => {
+                console.log(`Replaced audio track for peer ${peerId}`);
+            }).catch(error => {
+                console.error(`Error replacing audio track for peer ${peerId}:`, error);
+            });
 
-        if (audioSender && newAudioTrack) {
-            audioSender.replaceTrack(newAudioTrack);
-            console.log(`Replaced audio track for peer ${peerId}`);
-        } else if (audioSender && !newAudioTrack) {
-            peerConnection.removeTrack(audioSender);
-            console.log(`Removed audio track for peer ${peerId}`);
+            // Set transceiver direction
+            if (newAudioTrack) {
+                state.audioTransceiver.direction = 'sendrecv';
+            } else {
+                state.audioTransceiver.direction = 'recvonly';
+            }
+
             renegotiationNeeded = true;
-        } else if (!audioSender && newAudioTrack) {
-            peerConnection.addTrack(newAudioTrack, newStream);
-            console.log(`Added audio track for peer ${peerId}`);
-            renegotiationNeeded = true;
+        } else {
+            console.warn(`No audio transceiver for peer ${peerId}`);
         }
 
-        // Initiate renegotiation if needed
+        // Renegotiate if needed
         if (renegotiationNeeded && peerConnection.signalingState === 'stable' && !state.makingOffer) {
-            console.log(`Initiating renegotiation with peer ${peerId} due to track changes`);
             renegotiate(peerId);
         }
     }
 }
+
 function leaveConference() {
     // Send a "leave" message to other participants
     sendMqttMessage({ type: 'leave' }, null, () => {
@@ -565,21 +651,27 @@ function leaveConference() {
         });
     });
 }
+
 let isScreenSharing = false;
 let screenStream;
+
 function replaceVideoTrack(newTrack) {
     for (const peerId in peers) {
-        const peerConnection = peers[peerId];
         const state = peerStates[peerId];
+        const peerConnection = peers[peerId];
 
-        // Get the sender for the video track
-        const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
-
-        if (sender) {
-            sender.replaceTrack(newTrack).then(() => {
+        if (state.videoTransceiver) {
+            state.videoTransceiver.sender.replaceTrack(newTrack).then(() => {
                 console.log(`Replaced video track for peer ${peerId}`);
 
-                // Initiate renegotiation if the signaling state is stable
+                // Set transceiver direction
+                if (newTrack) {
+                    state.videoTransceiver.direction = 'sendrecv';
+                } else {
+                    state.videoTransceiver.direction = 'recvonly';
+                }
+
+                // Renegotiate if needed
                 if (peerConnection.signalingState === 'stable' && !state.makingOffer) {
                     renegotiate(peerId);
                 }
@@ -587,41 +679,9 @@ function replaceVideoTrack(newTrack) {
                 console.error(`Error replacing video track for peer ${peerId}:`, error);
             });
         } else {
-            // If there is no video sender, add the new track
-            peerConnection.addTrack(newTrack, new MediaStream([newTrack]));
-
-            // Initiate renegotiation
-            if (peerConnection.signalingState === 'stable' && !state.makingOffer) {
-                renegotiate(peerId);
-            }
+            console.warn(`No video transceiver for peer ${peerId}`);
         }
     }
-}
-function renegotiate(peerId) {
-    const peerConnection = peers[peerId];
-    const state = peerStates[peerId];
-
-    if (state.makingOffer) {
-        console.log(`Already making an offer to peer ${peerId}, skipping renegotiation`);
-        return;
-    }
-
-    state.makingOffer = true;
-
-    peerConnection.createOffer().then(offer => {
-        return peerConnection.setLocalDescription(offer);
-    }).then(() => {
-        console.log(`Created and set local offer for peer ${peerId} during renegotiation`);
-        sendMqttMessage({
-            type: 'sdp',
-            sdp: peerConnection.localDescription.sdp,
-            sdpType: peerConnection.localDescription.type
-        }, peerId);
-    }).catch(err => {
-        console.error(`Error during renegotiation with peer ${peerId}:`, err);
-    }).finally(() => {
-        state.makingOffer = false;
-    });
 }
 
 function updateLocalVideo(stream) {
@@ -634,18 +694,7 @@ function updateLocalVideo(stream) {
         localVideo.style.display = 'none';
     }
 }
-function stopSendingVideoTrack() {
-    for (const peerId in peers) {
-        const peerConnection = peers[peerId];
 
-        // Get the sender for the video track
-        const sender = peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
-
-        if (sender) {
-            peerConnection.removeTrack(sender);
-        }
-    }
-}
 async function handleScreenShareToggle() {
     if (!isScreenSharing) {
         // Start screen sharing
@@ -656,7 +705,7 @@ async function handleScreenShareToggle() {
             updateLocalVideo(screenStream);
             replaceVideoTrack(screenStream.getVideoTracks()[0]);
             console.log('Screen sharing started.');
-            
+
             // Handle the event when the user stops screen sharing using browser UI
             screenStream.getVideoTracks()[0].addEventListener('ended', () => {
                 console.log('Screen sharing stopped by user.');
@@ -678,7 +727,7 @@ async function handleScreenShareToggle() {
             console.log('Reverted to camera stream.');
         } else {
             // No camera stream available
-            stopSendingVideoTrack();
+            replaceVideoTrack(null);
             updateLocalVideo(null);
             console.log('No camera stream available.');
         }
@@ -709,8 +758,8 @@ document.getElementById('leaveButton').addEventListener('click', () => {
     document.getElementById('joinButton').disabled = false;
     document.getElementById('leaveButton').disabled = true;
     document.getElementById('screenShareButton').disabled = true;
-
 });
+
 // Define the MQTT broker URL and topic prefix
 const mqttBroker = 'wss://mqtt-dashboard.com:8884/mqtt'; // Replace with your MQTT broker URL
 const mqttTopicPrefix = 'webrtc/';
