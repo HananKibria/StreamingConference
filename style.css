@@ -1,152 +1,159 @@
-/* style.css */
-
-/* Reset some basic elements for consistency across browsers */
+/* Reset default styles */
 * {
     margin: 0;
     padding: 0;
     box-sizing: border-box;
 }
 
-/* Set the font family for the entire document */
 body {
     font-family: 'Roboto', sans-serif;
-    background-color: #f4f4f4;
-    color: #333;
+    background-color: #202124;
+    color: #e8eaed;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
 }
 
-/* Container for the main content */
 .container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
 }
 
-/* Main heading */
-h1 {
-    text-align: center;
-    margin-bottom: 30px;
-    font-weight: 500;
-    color: #333;
+.meeting-info {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    display: flex;
+    align-items: center;
 }
 
-/* Form group styles */
-.form-group {
+.meeting-info input {
+    padding: 10px;
+    border: none;
+    border-radius: 4px;
+    width: 200px;
+    margin-right: 10px;
+}
+
+.meeting-info button {
+    padding: 10px 20px;
+    background-color: #1a73e8;
+    border: none;
+    border-radius: 4px;
+    color: #fff;
+    cursor: pointer;
+    margin-right: 10px;
+}
+
+.meeting-info button:disabled {
+    background-color: #5f6368;
+    cursor: not-allowed;
+}
+
+.meeting-info button:hover:not(:disabled) {
+    background-color: #185abc;
+}
+
+.video-container {
+    flex: 1;
     display: flex;
     flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    margin-bottom: 20px;
+    overflow: hidden;
+    position: relative;
+    margin-top: 80px; /* To avoid overlapping with the meeting info */
 }
 
-.form-group label {
-    margin: 5px 10px;
-    font-size: 16px;
-    color: #333;
+#localVideo {
+    position: absolute;
+    bottom: 100px;
+    right: 20px;
+    width: 200px;
+    height: 150px;
+    border: 2px solid #fff;
+    border-radius: 8px;
+    z-index: 10;
+    object-fit: cover;
+    background-color: #000;
 }
 
-.form-group input[type="text"] {
-    padding: 10px;
-    font-size: 16px;
-    margin: 5px 10px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
+.remote-videos {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
 }
 
-/* Style for checkboxes */
-.form-group input[type="checkbox"] {
-    margin-right: 5px;
+.remote-videos .video-wrapper {
+    flex: 1 1 calc(55.33% - 20px);
+    max-width: calc(55.33% - 20px);
+    margin: 10px;
+    position: relative;
 }
 
-/* Buttons styles */
-.form-group button {
-    padding: 10px 20px;
-    margin: 5px 10px;
-    font-size: 16px;
-    font-weight: 500;
-    color: #fff;
-    background-color: #007bff;
+.remote-videos .video-wrapper video {
+    width: 100%;
+    height: 100%;
+    border-radius: 8px;
+    object-fit: cover;
+    background-color: #000;
+}
+
+.control-bar {
+    height: 80px;
+    background-color: rgba(0, 0, 0, 0.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.control-button {
+    background: none;
     border: none;
-    border-radius: 4px;
+    color: #e8eaed;
+    font-size: 24px;
+    margin: 0 15px;
     cursor: pointer;
-    transition: background-color 0.3s ease;
+    outline: none;
+    transition: color 0.2s;
 }
 
-.form-group button:disabled {
-    background-color: #aaa;
+.control-button:hover {
+    color: #fff;
+}
+
+.control-button:disabled {
+    color: #5f6368;
     cursor: not-allowed;
 }
 
-.form-group button:hover:not(:disabled) {
-    background-color: #0056b3;
-}
-
-/* Video container styles */
-.video-container {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: flex-start;
-}
-
-/* Local video wrapper */
-.local-video {
-    width: 300px;
-    margin: 10px;
-}
-
-.local-video h2 {
-    text-align: center;
-    margin-bottom: 10px;
-    font-size: 18px;
-    font-weight: 500;
-}
-
-/* Remote videos container */
-.remote-videos {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    width: calc(100% - 320px);
-    margin: 10px;
-}
-
-/* Remote video wrapper */
-.video-wrapper {
-    width: 300px;
-    margin: 10px;
-}
-
-.video-wrapper h2 {
-    text-align: center;
-    margin-bottom: 10px;
-    font-size: 18px;
-    font-weight: 500;
-}
-
-/* Video element styles */
-video {
-    width: 100%;
-    height: auto;
-    background-color: #000;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-}
-
-/* Responsive design */
-@media screen and (max-width: 768px) {
-    .form-group {
-        flex-direction: column;
+@media screen and (max-width: 1024px) {
+    .remote-videos .video-wrapper {
+        flex: 1 1 calc(50% - 20px);
+        max-width: calc(50% - 20px);
     }
+}
 
-    .local-video,
-    .video-wrapper {
-        width: 100%;
+@media screen and (max-width: 768px) {
+    .remote-videos .video-wrapper {
+        flex: 1 1 100%;
         max-width: 100%;
     }
-
-    .remote-videos {
-        width: 100%;
-        flex-direction: column;
-        align-items: center;
+    #localVideo {
+        width: 150px;
+        height: 112px;
     }
+}
+.control-button:hover {
+    color: #fff;
+    transform: scale(1.1);
+}
+
+.control-button:active {
+    transform: scale(0.95);
 }

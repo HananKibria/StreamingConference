@@ -370,8 +370,8 @@ async function joinConference() {
 
 // Function to set up local media (camera and microphone)
 async function setupLocalMedia() {
-    const enableVideo = document.getElementById('enableVideo').checked;
-    const enableAudio = document.getElementById('enableAudio').checked;
+    const enableVideo = true;
+    const enableAudio = true;
 
     try {
         if (enableVideo || enableAudio) {
@@ -650,6 +650,10 @@ function leaveConference() {
             });
         });
     });
+    document.getElementById('joinButton').disabled = false;
+    document.getElementById('leaveButton').disabled = true;
+    document.getElementById('screenShareButton').disabled = true;
+    document.getElementById('leaveCallButton').disabled = true;
 }
 
 let isScreenSharing = false;
@@ -696,12 +700,16 @@ function updateLocalVideo(stream) {
 }
 
 async function handleScreenShareToggle() {
+    const screenShareButton = document.getElementById('screenShareButton');
     if (!isScreenSharing) {
         // Start screen sharing
         try {
             screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
             isScreenSharing = true;
-            document.getElementById('screenShareButton').textContent = 'Stop Screen Share';
+            // Change the icon to indicate screen sharing is active
+            screenShareButton.innerHTML = '<i class="fas fa-stop-circle"></i>';
+            screenShareButton.title = 'Stop Screen Share';
+
             updateLocalVideo(screenStream);
             replaceVideoTrack(screenStream.getVideoTracks()[0]);
             console.log('Screen sharing started.');
@@ -718,7 +726,9 @@ async function handleScreenShareToggle() {
     } else {
         // Stop screen sharing
         isScreenSharing = false;
-        document.getElementById('screenShareButton').textContent = 'Start Screen Share';
+        // Revert the icon back to the original
+        screenShareButton.innerHTML = '<i class="fas fa-desktop"></i>';
+        screenShareButton.title = 'Start Screen Share';
 
         // Revert to the camera stream if available
         if (localStream && localStream.getVideoTracks().length > 0) {
@@ -739,26 +749,57 @@ async function handleScreenShareToggle() {
         }
     }
 }
+function handleVideoToggle() {
+    const videoTrack = localStream.getVideoTracks()[0];
+    if (videoTrack) {
+        videoTrack.enabled = !videoTrack.enabled;
+        // Update the icon
+        const videoButton = document.getElementById('toggleVideo');
+        videoButton.innerHTML = videoTrack.enabled ? '<i class="fas fa-video"></i>' : '<i class="fas fa-video-slash"></i>';
+    }
+}
 
-document.getElementById('enableVideo').addEventListener('change', handleMediaToggle);
-document.getElementById('enableAudio').addEventListener('change', handleMediaToggle);
+function handleAudioToggle() {
+    const audioTrack = localStream.getAudioTracks()[0];
+    if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        // Update the icon
+        const audioButton = document.getElementById('toggleAudio');
+        audioButton.innerHTML = audioTrack.enabled ? '<i class="fas fa-microphone"></i>' : '<i class="fas fa-microphone-slash"></i>';
+    }
+}
+
+document.getElementById('toggleVideo').addEventListener('click', handleVideoToggle);
+document.getElementById('toggleAudio').addEventListener('click', handleAudioToggle);
 document.getElementById('screenShareButton').addEventListener('click', handleScreenShareToggle);
-
-// Add event listener to the Join Conference button
 document.getElementById('joinButton').addEventListener('click', async () => {
     await joinConference();
     document.getElementById('joinButton').disabled = true;
     document.getElementById('leaveButton').disabled = false;
     document.getElementById('screenShareButton').disabled = false;
+    document.getElementById('leaveCallButton').disabled = false;
 });
+document.getElementById('leaveButton').addEventListener('click', leaveConference);
+document.getElementById('leaveCallButton').addEventListener('click', leaveConference);
+// document.getElementById('enableVideo').addEventListener('change', handleMediaToggle);
+// document.getElementById('enableAudio').addEventListener('change', handleMediaToggle);
+// document.getElementById('screenShareButton').addEventListener('click', handleScreenShareToggle);
 
-// Add event listener to the Leave Conference button
-document.getElementById('leaveButton').addEventListener('click', () => {
-    leaveConference();
-    document.getElementById('joinButton').disabled = false;
-    document.getElementById('leaveButton').disabled = true;
-    document.getElementById('screenShareButton').disabled = true;
-});
+// // Add event listener to the Join Conference button
+// document.getElementById('joinButton').addEventListener('click', async () => {
+//     await joinConference();
+//     document.getElementById('joinButton').disabled = true;
+//     document.getElementById('leaveButton').disabled = false;
+//     document.getElementById('screenShareButton').disabled = false;
+// });
+
+// // Add event listener to the Leave Conference button
+// document.getElementById('leaveButton').addEventListener('click', () => {
+//     leaveConference();
+//     document.getElementById('joinButton').disabled = false;
+//     document.getElementById('leaveButton').disabled = true;
+//     document.getElementById('screenShareButton').disabled = true;
+// });
 
 // Define the MQTT broker URL and topic prefix
 const mqttBroker = 'wss://mqtt-dashboard.com:8884/mqtt'; // Replace with your MQTT broker URL

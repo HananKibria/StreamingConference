@@ -7,38 +7,32 @@
     <link rel="stylesheet" href="style.css">
     <!-- Include Google Fonts for better typography -->
     <link href="https://fonts.googleapis.com/css?family=Roboto:400,500&display=swap" rel="stylesheet">
+    <!-- Include Font Awesome for icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.1/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer" />
 </head>
 <body>
     <div class="container">
-        <h1>WebRTC Video Conferencing</h1>
-        <div class="form-group">
-            <label for="meetingId">Meeting ID:</label>
+        <!-- Meeting Info -->
+        <div class="meeting-info">
             <input type="text" id="meetingId" placeholder="Enter Meeting ID">
+            <button id="joinButton">Join</button>
+            <button id="leaveButton" disabled>Leave</button>
         </div>
-        <div class="form-group">
-            <label>
-                <input type="checkbox" id="enableVideo" checked>
-                Enable Camera
-            </label>
-            <label>
-                <input type="checkbox" id="enableAudio" checked>
-                Enable Microphone
-            </label>
-            <label> Share Screen</label>
-        </div>
-        <div class="form-group">
-            <button id="joinButton">Join Conference</button>
-            <button id="leaveButton" disabled>Leave Conference</button>
-            <button id="screenShareButton" disabled>Start Screen Share</button>
-        </div>
+        <!-- Video Grid -->
         <div class="video-container">
-            <div class="video-wrapper local-video">
-                <h2>Local Video</h2>
-                <video id="localVideo" autoplay playsinline muted></video>
-            </div>
+            <!-- Local Video -->
+            <video id="localVideo" autoplay playsinline muted></video>
+            <!-- Remote Videos -->
             <div id="remoteVideos" class="remote-videos">
-                <!-- Remote videos will be appended here -->
+                <!-- Remote videos will be dynamically added here -->
             </div>
+        </div>
+        <!-- Control Bar -->
+        <div class="control-bar">
+            <button id="toggleAudio" class="control-button"><i class="fas fa-microphone"></i></button>
+            <button id="toggleVideo" class="control-button"><i class="fas fa-video"></i></button>
+            <button id="screenShareButton" class="control-button" disabled><i class="fas fa-desktop"></i></button>
+            <button id="leaveCallButton" class="control-button" disabled><i class="fas fa-phone-slash"></i></button>
         </div>
     </div>
 
