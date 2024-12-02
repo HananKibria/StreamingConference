@@ -33,11 +33,19 @@
             <button id="toggleVideo" class="control-button"><i class="fas fa-video"></i></button>
             <button id="screenShareButton" class="control-button" disabled><i class="fas fa-desktop"></i></button>
             <button id="leaveCallButton" class="control-button" disabled><i class="fas fa-phone-slash"></i></button>
+            <!-- Recording Buttons -->
+            <button id="startRecordingButton" class="control-button"><i class="fas fa-record-vinyl"></i></button>
+            <button id="stopRecordingButton" class="control-button" disabled><i class="fas fa-stop"></i></button>
         </div>
     </div>
+    
+    <!-- Hidden canvas for recording -->
+    <canvas id="recordingCanvas" width="1280" height="720" style="display:none;"></canvas>
 
     <!-- Include the MQTT library -->
     <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- Include JSZip library for zipping files -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
     <!-- Include your main JavaScript code -->
     <script src="script.js"></script>
 </body>

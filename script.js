@@ -10,6 +10,12 @@ let localStream; // Global variable for local media stream
 let peerActivity = {}; // Tracks the last activity time of peers
 let isLocalMediaReady = false; // Flag to indicate local media readiness
 
+let isRecording = false;
+let mediaRecorder;
+let recordedBlobs = [];
+let canvasStream;
+let mixedAudioStream;
+let combinedStream;
 // Generate a unique ID for this peer
 function generateUniqueId() {
     return Math.floor(Math.random() * 1000000).toString();
@@ -364,6 +370,9 @@ async function joinConference() {
     // Handle page unload to send "leave" message
     window.addEventListener('beforeunload', () => {
         sendMqttMessage({ type: 'leave' });
+        if (isRecording) {
+            stopRecording();
+        }
         closeAllConnections();
     });
 }
@@ -654,6 +663,9 @@ function leaveConference() {
     document.getElementById('leaveButton').disabled = true;
     document.getElementById('screenShareButton').disabled = true;
     document.getElementById('leaveCallButton').disabled = true;
+    if (isRecording) {
+        stopRecording();
+    }
 }
 
 let isScreenSharing = false;
@@ -804,3 +816,268 @@ document.getElementById('leaveCallButton').addEventListener('click', leaveConfer
 // Define the MQTT broker URL and topic prefix
 const mqttBroker = 'wss://mqtt-dashboard.com:8884/mqtt'; // Replace with your MQTT broker URL
 const mqttTopicPrefix = 'webrtc/';
+//let angle = 0;
+
+// function drawCanvas() {
+//     ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+//     // Existing code to draw videos...
+
+//     // Draw a small rotating rectangle to force canvas updates
+//     ctx.save();
+//     ctx.translate(canvas.width - 50, canvas.height - 50);
+//     ctx.rotate(angle);
+//     ctx.fillStyle = 'red';
+//     ctx.fillRect(-10, -10, 20, 20);
+//     ctx.restore();
+
+//     angle += 0.1; // Update angle to animate
+
+//     if (isRecording) {
+//         requestAnimationFrame(drawCanvas);
+//     }
+//     const drawInterval = setInterval(drawCanvas, 33); // Approximately 30 FPS
+
+// // When stopping recording
+//     if (!isRecording) {
+//          clearInterval(drawInterval);
+//     }
+// }
+
+function startRecording() {
+    if (isRecording) return;
+
+    console.log('Initializing recording...');
+
+    // Create canvas and context
+    const canvas = document.getElementById('recordingCanvas');
+    if (!canvas) {
+        console.error('Canvas element not found.');
+        return;
+    }
+    const ctx = canvas.getContext('2d');
+
+    // Get video elements (local and remote)
+    const videoElements = [document.getElementById('localVideo')];
+    for (const peerId in remoteVideoContainers) {
+        const videoWrapper = remoteVideoContainers[peerId];
+        const videoElement = videoWrapper.querySelector('video');
+        videoElements.push(videoElement);
+    }
+
+    // Ensure video elements are playing
+    videoElements.forEach(video => {
+        if (video.paused || video.readyState <= 2) {
+            video.play().catch(error => {
+                console.error('Error playing video element:', error);
+            });
+        }
+    });
+
+    // Adjust canvas size based on number of videos
+    adjustCanvasSize(canvas, videoElements.length);
+
+    // Initialize variables for animation
+    let angle = 0;
+
+    // Set up drawing loop
+    function drawCanvas() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Calculate positions for videos (e.g., grid layout)
+        const cols = Math.ceil(Math.sqrt(videoElements.length));
+        const rows = Math.ceil(videoElements.length / cols);
+        const videoWidth = canvas.width / cols;
+        const videoHeight = canvas.height / rows;
+
+        videoElements.forEach((video, index) => {
+            const x = (index % cols) * videoWidth;
+            const y = Math.floor(index / cols) * videoHeight;
+            ctx.drawImage(video, x, y, videoWidth, videoHeight);
+        });
+
+        // Add a small rotating rectangle to force canvas updates
+        ctx.save();
+        ctx.translate(canvas.width - 50, canvas.height - 50);
+        ctx.rotate(angle);
+        ctx.fillStyle = 'red';
+        ctx.fillRect(-10, -10, 20, 20);
+        ctx.restore();
+
+        angle += 0.1; // Update angle to animate
+
+        // Continue the loop
+        if (isRecording) {
+            requestAnimationFrame(drawCanvas);
+        }
+    }
+
+    // Start the drawing loop
+    requestAnimationFrame(drawCanvas);
+
+    // Capture canvas stream
+    canvasStream = canvas.captureStream(30); // 30 FPS
+
+    // For testing, use only the canvasStream
+    combinedStream = canvasStream;
+
+    // Check combined stream tracks
+    console.log('Combined Stream Tracks:', combinedStream.getTracks());
+    combinedStream.getTracks().forEach(track => {
+        console.log(`${track.kind} track - enabled: ${track.enabled}, readyState: ${track.readyState}`);
+    });
+
+    // Initialize MediaRecorder
+    let options = { mimeType: 'video/webm; codecs=vp9' };
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = { mimeType: 'video/webm; codecs=vp8' };
+    }
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = { mimeType: 'video/webm' };
+    }
+    if (!MediaRecorder.isTypeSupported(options.mimeType)) {
+        options = '';
+    }
+    console.log('Using MediaRecorder options:', options);
+    try {
+        mediaRecorder = new MediaRecorder(combinedStream, options);
+    } catch (e) {
+        console.error('Exception while creating MediaRecorder:', e);
+        alert('MediaRecorder is not supported by this browser.');
+        return;
+    }
+
+    // Add event listeners for debugging
+    mediaRecorder.ondataavailable = handleDataAvailable;
+    mediaRecorder.onstart = () => {
+        console.log('MediaRecorder started');
+    };
+    mediaRecorder.onstop = () => {
+        console.log('MediaRecorder stopped');
+    };
+    mediaRecorder.onerror = function (event) {
+        console.error('MediaRecorder error:', event.error);
+    };
+    mediaRecorder.onwarning = (e) => {
+        console.warn('MediaRecorder warning:', e);
+    };
+
+    // Start recording with timeslice of 5000ms
+    try {
+        mediaRecorder.start(5000); // Collect data in chunks of 5 seconds
+        console.log('MediaRecorder state after start:', mediaRecorder.state);
+        isRecording = true;
+        console.log('Recording started');
+    } catch (e) {
+        console.error('Error starting MediaRecorder:', e);
+        return;
+    }
+
+    // Update UI
+    document.getElementById('startRecordingButton').disabled = true;
+    document.getElementById('stopRecordingButton').disabled = false;
+}
+
+function stopRecording() {
+    if (!isRecording) return;
+
+    mediaRecorder.stop();
+    isRecording = false;
+    console.log('Recording stopped');
+
+    // Update UI
+    document.getElementById('startRecordingButton').disabled = false;
+    document.getElementById('stopRecordingButton').disabled = true;
+
+    // Create a ZIP file of recorded segments
+    if (window.recordingSegments && window.recordingSegments.length > 0) {
+        const zip = new JSZip();
+        window.recordingSegments.forEach(segment => {
+            zip.file(segment.filename, segment.blob);
+        });
+
+        zip.generateAsync({ type: 'blob' }).then(content => {
+            // Create a download link for the ZIP file
+            const zipFilename = `meeting_recording_${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
+            const url = window.URL.createObjectURL(content);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = zipFilename;
+            document.body.appendChild(a);
+            a.click();
+
+            // Clean up
+            setTimeout(() => {
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            }, 100);
+
+            // Reset the recorded segments
+            window.recordingSegments = [];
+        });
+    }
+}
+
+function handleDataAvailable(event) {
+    if (event.data && event.data.size > 0) {
+        // Create a timestamped filename
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const filename = `meeting_recording_${timestamp}.webm`;
+
+        // Store the filename and blob
+        if (!window.recordingSegments) {
+            window.recordingSegments = [];
+        }
+        window.recordingSegments.push({ filename, blob: event.data });
+    }
+}
+
+function getMixedAudioStream() {
+    const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const destination = audioContext.createMediaStreamDestination();
+
+    // Add local audio tracks
+    if (localStream && localStream.getAudioTracks().length > 0) {
+        const source = audioContext.createMediaStreamSource(new MediaStream([localStream.getAudioTracks()[0]]));
+        source.connect(destination);
+    }
+
+    // Add remote audio tracks
+    for (const peerId in peerStreams) {
+        const remoteStream = peerStreams[peerId];
+        if (remoteStream && remoteStream.getAudioTracks().length > 0) {
+            const source = audioContext.createMediaStreamSource(new MediaStream([remoteStream.getAudioTracks()[0]]));
+            source.connect(destination);
+        }
+    }
+
+    return destination.stream;
+}
+
+function updateRecordingStreams() {
+    if (!isRecording) return;
+
+    // Stop current recording
+    mediaRecorder.stop();
+    isRecording = false;
+
+    // Restart recording
+    startRecording();
+}
+
+function adjustCanvasSize(canvas, videoCount) {
+    // Adjust canvas size based on the number of video elements
+    // For simplicity, we keep it fixed at 1280x720
+    canvas.width = 1280;
+    canvas.height = 720;
+}
+
+// Add event listeners for recording buttons
+document.getElementById('startRecordingButton').addEventListener('click', () => {
+    startRecording();
+});
+
+document.getElementById('stopRecordingButton').addEventListener('click', () => {
+    stopRecording();
+});
