@@ -12,7 +12,7 @@ let isLocalMediaReady = false; // Flag to indicate local media readiness
 
 // Generate a unique ID for this peer
 function generateUniqueId() {
-    return Math.floor(Math.random() * 1000000); // Remove .toString() to keep it as a number
+    return Math.floor(Math.random() * 1000000).toString();
 }
 
 localId = generateUniqueId();
