@@ -12,7 +12,7 @@ let isLocalMediaReady = false; // Flag to indicate local media readiness
 
 // Generate a unique ID for this peer
 function generateUniqueId() {
-    return Math.floor(Math.random() * 1000000).toString();
+    return Math.floor(Math.random() * 1000000); // Remove .toString() to keep it as a number
 }
 
 localId = generateUniqueId();
@@ -107,7 +107,7 @@ function initiateConnectionWithPeer(peerId) {
         makingOffer: false,
         ignoreOffer: false,
         isSettingRemoteAnswerPending: false,
-        polite: localId < peerId, // The peer with the lower ID is polite
+        polite: parseInt(localId) < parseInt(peerId), // The peer with the lower ID is polite
         pendingCandidates: []
     };
 
